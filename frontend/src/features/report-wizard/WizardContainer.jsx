@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { supabase } from '../../api/supabase';
-// Предположим, что эти компоненты лежат в той же папке или в /steps
 import { RepoStep } from './steps/RepoStep'; 
 import { TitleStep } from './steps/TitleStep';
 import { SuccessStep } from './steps/SuccessStep';
@@ -16,7 +15,7 @@ const WizardContainer = () => {
     workType: 'Лабораторная работа',
     workNumber: '',
     variant: '',
-    instruction: '' // Текст задания из методички
+    instruction: '' 
   });
 
   const handleFinish = async () => {
@@ -33,60 +32,46 @@ const WizardContainer = () => {
       const result = await response.json();
 
       if (response.ok) {
-        setStep(2);
-        // Сразу скачиваем файл из Supabase Storage
+        setStep(2); // Показываем экран успеха
+        
+        // АВТОМАТИЧЕСКОЕ СКАЧИВАНИЕ
         if (result.downloadUrl) {
-          window.open(result.downloadUrl, '_blank');
+          const link = document.createElement('a');
+          link.href = result.downloadUrl;
+          link.setAttribute('download', ''); 
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
         }
       } else {
-        alert(result.detail || "Ошибка при генерации");
+        alert("Ошибка сервера: " + result.detail);
       }
     } catch (e) {
-      console.error(e);
-      alert("Ошибка соединения с бэкендом. Проверьте, запущен ли Python сервер.");
+      alert("Не удалось связаться с бэкендом. Проверь, запущен ли Python сервер.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
+    <div className="max-w-4xl mx-auto bg-white rounded-[2.5rem] shadow-2xl overflow-hidden border border-slate-100">
       <Stepper currentStep={step} />
       
-      <div className="p-8 md:p-12">
-        {step === 0 && (
-          <RepoStep 
-            value={formData.repoUrl} 
-            onChange={(val) => setFormData({...formData, repoUrl: val})} 
-          />
-        )}
-        
-        {step === 1 && (
-          <TitleStep 
-            data={formData} 
-            onChange={(newData) => setFormData({...formData, ...newData})} 
-          />
-        )}
-
+      <div className="p-12">
+        {step === 0 && <RepoStep value={formData.repoUrl} onChange={(v) => setFormData({...formData, repoUrl: v})} />}
+        {step === 1 && <TitleStep data={formData} onChange={(d) => setFormData({...formData, ...d})} />}
         {step === 2 && <SuccessStep />}
 
-        <div className="mt-12 flex justify-between items-center border-t border-slate-100 pt-8">
+        <div className="mt-12 flex justify-between pt-8 border-t border-slate-50">
           {step < 2 && (
             <>
-              <button 
-                disabled={step === 0}
-                onClick={() => setStep(step - 1)}
-                className="px-6 py-3 text-slate-400 font-semibold disabled:opacity-0 hover:text-slate-600 transition-colors"
-              >
-                Назад
-              </button>
-              
+              <button onClick={() => setStep(step - 1)} disabled={step === 0} className="text-slate-400 font-bold px-4 disabled:opacity-0">Назад</button>
               <button 
                 onClick={step === 1 ? handleFinish : () => setStep(step + 1)}
                 disabled={loading}
-                className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all disabled:bg-slate-300"
+                className="px-12 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-200 hover:scale-105 transition-all"
               >
-                {loading ? 'Создаем документ...' : (step === 1 ? 'Сгенерировать отчет' : 'Далее')}
+                {loading ? 'СОЗДАЕМ...' : (step === 1 ? 'ГЕНЕРИРОВАТЬ' : 'ДАЛЕЕ')}
               </button>
             </>
           )}
@@ -96,4 +81,4 @@ const WizardContainer = () => {
   );
 };
 
-export default WizardContainer; // Важно: добавляем default export
+export default WizardContainer;

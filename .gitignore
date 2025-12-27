@@ -30,3 +30,11 @@ yarn-error.log*
 .idea/
 *.swp
 *.swo
+# Backend
+backend/temp/
+backend/__pycache__/
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

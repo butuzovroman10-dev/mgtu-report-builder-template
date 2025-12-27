@@ -1,29 +1,42 @@
 import os
-import shutil
 import uuid
-from datetime import datetime
-from fastapi import FastAPI, HTTPException, Depends
+import logging
+import subprocess
+import shutil
+import imgkit
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-# Библиотеки для Word и Графиков
+# Работа с Word
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
-import matplotlib.pyplot as plt
 
+# Загрузка настроек
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Настройка CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Инициализация Supabase
-SUPABASE_URL = os.getenv("VITE_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("VITE_SUPABASE_ANON_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+url = os.getenv("VITE_SUPABASE_URL")
+key = os.getenv("VITE_SUPABASE_ANON_KEY")
+supabase: Client = create_client(url, key)
 
 class ReportRequest(BaseModel):
     repoUrl: str
@@ -33,126 +46,165 @@ class ReportRequest(BaseModel):
     workNumber: str
     variant: str
     userId: str
-    instruction: str  # Текст задания из методички
+    instruction: str
 
-def set_font_times_new_roman(run, size=14):
-    """Утилита для установки шрифта Times New Roman"""
+def set_font_times(run, size=14, bold=False):
+    """Шрифт Times New Roman по ГОСТ"""
     run.font.name = 'Times New Roman'
-    run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
-    run._element.rPr.rFonts.set(qn('w:hAnsi'), 'Times New Roman')
     run._element.rPr.rFonts.set(qn('w:ascii'), 'Times New Roman')
+    run._element.rPr.rFonts.set(qn('w:hAnsi'), 'Times New Roman')
     run.font.size = Pt(size)
+    run.bold = bold
 
-def create_report_docx(data: ReportRequest):
-    # Логика именования и выбора преподавателя
-    fio_parts = data.fullName.split()
-    fio_short = f"{fio_parts[0]}_{fio_parts[1][0]}{fio_parts[2][0]}" if len(fio_parts) >= 3 else "Student"
+def parse_instruction(text):
+    """Разбор текста на Тему, Цель и Задачи"""
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    theme = lines[0] if lines else "Без темы"
     
-    type_map = {
-        "Лабораторная работа": {"short": "лаб", "teacher": "М.И. Колосов", "title": "ОТЧЕТ ПО ЛАБОРАТОРНОЙ РАБОТЕ"},
-        "Домашнее задание": {"short": "ДЗ", "teacher": "М.И. Колосов", "title": "ДОМАШНЯЯ РАБОТА"},
-        "Семинар": {"short": "Семинар", "teacher": "А.В. Волосова", "title": "ОТЧЕТ ПО СЕМИНАРНОЙ РАБОТЕ"}
-    }
-    info = type_map.get(data.workType, {"short": "работа", "teacher": "Преподаватель", "title": "ОТЧЕТ"})
+    goal = "Цель работы не указана"
+    tasks = text
     
-    filename = f"{fio_short}_{data.group}_{info['short']}_{data.workNumber}_Основы_программирования_2025.docx"
+    for line in lines:
+        if line.lower().startswith("цель:"):
+            goal = line.replace("Цель:", "").replace("цель:", "").strip()
+        if line.lower().startswith("задача:") or line.lower().startswith("задачи:"):
+            tasks = line
+            
+    return theme, goal, tasks
+
+def process_github_content(repo_url, temp_dir):
+    """Клонирование и поиск визуализаций"""
+    images = []
+    try:
+        subprocess.run(["git", "clone", repo_url, temp_dir], check=True, capture_output=True)
+        
+        for root, dirs, files in os.walk(temp_dir):
+            if 'venv' in root or '.git' in root: continue
+            for file in files:
+                full_path = os.path.join(root, file)
+                # Если нашли картинку
+                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    images.append(full_path)
+                # Если нашли HTML график (Plotly и др.)
+                elif file.lower().endswith('.html'):
+                    try:
+                        img_path = full_path.replace('.html', '_snap.png')
+                        imgkit.from_file(full_path, img_path, options={'quiet': ''})
+                        images.append(img_path)
+                    except Exception as e:
+                        logger.warning(f"Could not convert HTML {file}: {e}")
+    except Exception as e:
+        logger.error(f"GitHub Error: {e}")
+    return images
+
+def generate_docx_report(data: ReportRequest):
+    theme, goal, tasks = parse_instruction(data.instruction)
+    repo_dir = f"temp/repo_{uuid.uuid4().hex}"
+    images = process_github_content(data.repoUrl, repo_dir)
     
     doc = Document()
     
-    # Настройка абзаца по умолчанию (1.5 интервал, выравнивание по ширине)
-    style = doc.styles['Normal']
-    pf = style.paragraph_format
-    pf.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-    pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    # Поля ГОСТ
+    section = doc.sections[0]
+    section.left_margin, section.right_margin = Inches(1.18), Inches(0.39)
 
-    # --- ТИТУЛЬНЫЙ ЛИСТ ---
-    p_header = doc.add_paragraph()
-    p_header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p_header.add_run(
+    # --- ТИТУЛЬНЫЙ ЛИСТ (Бауманка) ---
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    header = (
         "Министерство науки и высшего образования Российской Федерации\n"
-        "МГТУ им. Н.Э. Баумана\n"
-        "ФАКУЛЬТЕТ ИНФОРМАТИКА И СИСТЕМЫ УПРАВЛЕНИЯ\n"
-        "КАФЕДРА ИУ5\n\n\n\n"
+        "Федеральное государственное автономное образовательное учреждение\n"
+        "высшего образования\n"
+        "«Московский государственный технический университет\n"
+        "имени Н.Э. Баумана\n"
+        "(национальный исследовательский университет)»\n"
+        "(МГТУ им. Н.Э. Баумана)\n"
     )
-    set_font_times_new_roman(run, 12)
+    set_font_times(p.add_run(header), 10)
 
-    p_title = doc.add_paragraph()
-    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run_t = p_title.add_run(f"{info['title']} №{data.workNumber}\nВариант {data.variant}")
-    run_t.bold = True
-    set_font_times_new_roman(run_t, 16)
+    p_fac = doc.add_paragraph()
+    p_fac.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_fac = p_fac.add_run("\nФАКУЛЬТЕТ ИНФОРМАТИКА И СИСТЕМЫ УПРАВЛЕНИЯ\n"
+                            "КАФЕДРА СИСТЕМЫ ОБРАБОТКИ ИНФОРМАЦИИ И УПРАВЛЕНИЯ\n")
+    set_font_times(run_fac, 12, bold=True)
 
-    for _ in range(6): doc.add_paragraph()
+    for _ in range(4): doc.add_paragraph()
+    
+    p_work = doc.add_paragraph()
+    p_work.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_font_times(p_work.add_run(f"{data.workType.upper()} №{data.workNumber}\nНА ТЕМУ:"), 16)
+    
+    p_theme = doc.add_paragraph()
+    p_theme.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_font_times(p_theme.add_run(f"«{theme}»"), 14, bold=True)
 
-    table = doc.add_table(rows=2, cols=2)
-    table.cell(0, 0).text = f"Студент {data.group}"
-    table.cell(0, 1).text = data.fullName
-    table.cell(1, 0).text = "Преподаватель"
-    table.cell(1, 1).text = info['teacher']
+    for _ in range(5): doc.add_paragraph()
+    
+    # Таблица подписей
+    table = doc.add_table(rows=2, cols=3)
+    table.columns[0].width = Inches(2.0)
+    table.rows[0].cells[0].text = f"Студент {data.group}"
+    table.rows[0].cells[2].text = data.fullName
+    table.rows[1].cells[0].text = "Руководитель"
+    table.rows[1].cells[2].text = "М.И. Колосов"
     
     for row in table.rows:
         for cell in row.cells:
-            for p in cell.paragraphs:
-                set_font_times_new_roman(p.runs[0] if p.runs else p.add_run(), 14)
+            for para in cell.paragraphs:
+                if para.runs: set_font_times(para.runs[0], 12)
 
     doc.add_page_break()
 
-    # --- СОДЕРЖАНИЕ НА ОСНОВЕ ИНСТРУКЦИИ ---
-    h1 = doc.add_heading('1. Цель и задачи работы', level=1)
-    set_font_times_new_roman(h1.add_run(), 16)
+    # --- ОСНОВНАЯ ЧАСТЬ ---
+    doc.add_heading('1. ЦЕЛЬ И ЗАДАЧИ РАБОТЫ', level=1)
+    p_goal = doc.add_paragraph()
+    set_font_times(p_goal.add_run(f"Цель работы: {goal}"), 14)
     
-    doc.add_paragraph(f"В соответствии с заданием: {data.instruction}")
+    doc.add_heading('2. ФОРМУЛИРОВКА ЗАДАНИЯ', level=1)
+    p_tasks = doc.add_paragraph()
+    p_tasks.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p_tasks.paragraph_format.first_line_indent = Inches(0.5)
+    set_font_times(p_tasks.add_run(tasks), 14)
 
-    # Генерация графика
-    plt.figure(figsize=(6, 4))
-    plt.plot([1, 2, 3], [10, 40, 90], marker='o')
-    plt.title('Анализ производительности')
-    graph_path = f"temp/plot_{uuid.uuid4()}.png"
-    os.makedirs("temp", exist_ok=True)
-    plt.savefig(graph_path)
-    plt.close()
+    # --- ГРАФИКА ---
+    doc.add_heading('3. РЕЗУЛЬТАТЫ ВЫПОЛНЕНИЯ (ИЗ РЕПОЗИТОРИЯ)', level=1)
+    if images:
+        for idx, img_path in enumerate(images[:5]): # Ограничим до 5 картинок
+            try:
+                doc.add_picture(img_path, width=Inches(5))
+                cap = doc.add_paragraph(f"Рисунок {idx+1} — Графический результат ({os.path.basename(img_path)})")
+                cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                set_font_times(cap.runs[0], 12)
+            except: continue
+    else:
+        doc.add_paragraph("В репозитории не обнаружено графических файлов (.png, .jpg) или .html графиков.")
 
-    doc.add_heading('2. Результаты тестирования', level=1)
-    doc.add_picture(graph_path, width=Inches(5))
-    cap = doc.add_paragraph("Рисунок 1 — График зависимости времени от входных данных")
-    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    doc.add_page_break()
-    doc.add_heading('3. Заключение', level=1)
-    doc.add_paragraph("Работа выполнена в полном объеме. Алгоритмы протестированы и соответствуют заданным критериям точности.")
-
-    local_path = f"temp/{filename}"
+    # Сохранение
+    local_path = f"temp/Report_{uuid.uuid4().hex[:6]}.docx"
     doc.save(local_path)
-    return local_path, filename
+    shutil.rmtree(repo_dir, ignore_errors=True)
+    return local_path
 
 @app.post("/generate-report")
 async def generate(request: ReportRequest):
     try:
-        # Генерация файла
-        local_path, filename = create_report_docx(request)
-
-        # Загрузка в Supabase Storage (бакет 'reports')
-        storage_path = f"{request.userId}/{filename}"
+        local_path = generate_docx_report(request)
+        storage_path = f"{request.userId}/{os.path.basename(local_path)}"
+        
         with open(local_path, "rb") as f:
             supabase.storage.from_("reports").upload(storage_path, f)
 
-        # Получение ссылки
         file_url = supabase.storage.from_("reports").get_public_url(storage_path)
-
-        # Сохранение в БД
         supabase.table("reports").insert({
-            "user_id": request.userId,
-            "topic": f"{request.workType} №{request.workNumber}",
-            "file_url": file_url
+            "user_id": request.userId, "topic": request.workType, 
+            "file_url": file_url, "github_url": request.repoUrl
         }).execute()
 
         return {"status": "success", "downloadUrl": file_url}
-
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Чистим локальные временные файлы
         if 'local_path' in locals() and os.path.exists(local_path):
             os.remove(local_path)
 

@@ -1,0 +1,12 @@
+INFO:     Started server process [88941]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:httpx:HTTP Request: POST https://qbkkdybpzzgaynspfmvz.supabase.co/storage/v1/object/reports/dfaa3d32-09f1-4927-a8d2-3f78e2423f0e/Report_8981d5.docx "HTTP/2 200 OK"
+INFO:httpx:HTTP Request: POST https://qbkkdybpzzgaynspfmvz.supabase.co/rest/v1/reports "HTTP/2 201 Created"
+Storage endpoint URL should have a trailing slash.
+INFO:     127.0.0.1:43868 - "POST /generate-report HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [88941]
