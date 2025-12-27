@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../../api/supabase';
+import { supabase } from '../../supabaseClient';
 import { FileDown, ExternalLink, Calendar, FileText } from 'lucide-react';
 
 const ReportsList = () => {

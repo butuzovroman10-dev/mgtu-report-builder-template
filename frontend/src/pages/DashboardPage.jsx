@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../api/supabase';
+import { supabase } from '../supabaseClient';
 import WizardContainer from '../features/report-wizard/WizardContainer';
 import ReportsList from '../features/reports-history/ReportsList'; // Создадим ниже
 import { LogOut, Layout, FileText, Settings, User } from 'lucide-react';
